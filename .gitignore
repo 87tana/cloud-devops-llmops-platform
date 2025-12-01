@@ -1,0 +1,19 @@
+# Ignore model files
+models/
+*.safetensors
+*.bin
+*.pt
+*.json
+
+# Python cache
+__pycache__/
+
+# Streamlit cache
+.streamlit/
+
+# Virtual envs
+venv/
+env/
+
+# Docker junk
+*.log
