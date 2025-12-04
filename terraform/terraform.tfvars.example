@@ -1,0 +1,89 @@
+# =============================================================================
+# ML Platform Infrastructure - Terraform Variables Example
+# =============================================================================
+# Copy this file to terraform.tfvars and update values for your environment
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Project Configuration
+# -----------------------------------------------------------------------------
+project_name = "mlplatform"
+environment  = "auto"
+location     = "eastus"
+
+# Resource group name (will be created)
+resource_group_name = "rg-mlplatform-auto"
+
+# -----------------------------------------------------------------------------
+# Network Configuration
+# -----------------------------------------------------------------------------
+vnet_address_space           = ["10.1.0.0/16"]
+control_plane_subnet_prefix  = "10.1.1.0/24"
+gpu_worker_subnet_prefix     = "10.1.2.0/24"
+
+# Private IPs for VMs (must be within their respective subnet ranges)
+control_plane_private_ip = "10.1.1.10"
+gpu_worker_private_ip    = "10.1.2.10"
+
+# -----------------------------------------------------------------------------
+# Kubernetes Configuration
+# -----------------------------------------------------------------------------
+# Kubernetes version - must match on all nodes
+kubernetes_version = "1.31"
+
+# Pod network CIDR for Flannel CNI
+pod_network_cidr = "10.244.0.0/16"
+
+# -----------------------------------------------------------------------------
+# VM Configuration
+# -----------------------------------------------------------------------------
+# Control Plane VM (Standard_B4ms = 4 vCPU, 16 GB RAM, burstable)
+# Minimum 4 vCPUs recommended for Kubernetes control plane
+control_plane_vm_size = "Standard_B4ms"
+
+# GPU Worker VM (Standard_NC4as_T4_v3 = 4 vCPU, 28 GB RAM, 1x NVIDIA T4)
+# Alternative GPU options:
+#   - Standard_NC6s_v3      = 6 vCPU, 112 GB RAM, 1x V100
+#   - Standard_NC12s_v3     = 12 vCPU, 224 GB RAM, 2x V100
+#   - Standard_NC24s_v3     = 24 vCPU, 448 GB RAM, 4x V100
+#   - Standard_ND40rs_v2    = 40 vCPU, 672 GB RAM, 8x V100
+gpu_worker_vm_size = "Standard_NC4as_T4_v3"
+
+# -----------------------------------------------------------------------------
+# Authentication
+# -----------------------------------------------------------------------------
+# SSH username for VM access
+admin_username = "azureuser"
+
+# Path to your SSH public key
+# Generate with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/mlplatform_rsa
+admin_ssh_public_key_path = "~/.ssh/id_rsa.pub"
+
+# -----------------------------------------------------------------------------
+# Storage Configuration
+# -----------------------------------------------------------------------------
+# Storage account tier (Standard or Premium)
+storage_account_tier = "Standard"
+
+# Storage account replication (LRS, GRS, ZRS, GZRS)
+storage_account_replication = "LRS"
+
+# Blob container names
+blob_containers = ["models", "uploads", "datasets"]
+
+# -----------------------------------------------------------------------------
+# Container Registry Configuration
+# -----------------------------------------------------------------------------
+# ACR SKU (Basic, Standard, Premium)
+acr_sku = "Basic"
+
+# -----------------------------------------------------------------------------
+# Tags
+# -----------------------------------------------------------------------------
+# Common tags applied to all resources
+tags = {
+  Environment = "Development"
+  Project     = "ML-Platform"
+  ManagedBy   = "Terraform"
+  Team        = "MLOps"
+}

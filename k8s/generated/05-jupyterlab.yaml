@@ -1,0 +1,146 @@
+# =============================================================================
+# ML Platform - JupyterLab Service (GPU)
+# =============================================================================
+# Interactive development environment with GPU access
+# Scheduled on GPU worker node for ML workloads
+# =============================================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-jupyterlab
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: jupyterlab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-jupyterlab
+  template:
+    metadata:
+      labels:
+        app: ml-jupyterlab
+        app.kubernetes.io/name: ml-platform
+        app.kubernetes.io/component: jupyterlab
+    spec:
+      serviceAccountName: ml-platform-sa
+      # Schedule on GPU node
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: jupyterlab
+          # UPDATE: Replace with your ACR after terraform apply
+          # image: <your-acr>.azurecr.io/ml-jupyterlab:v1
+          image: mlplatformacrwqckxk.azurecr.io/ml-jupyterlab:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8888
+              name: http
+          env:
+            - name: JUPYTER_ENABLE_LAB
+              value: "yes"
+            - name: JUPYTER_TOKEN
+              value: "mlplatform2024"  # Change in production!
+            - name: MODELS_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-platform-config
+                  key: MODELS_DIR
+            - name: UPLOAD_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-platform-config
+                  key: UPLOAD_DIR
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models
+            - name: uploads
+              mountPath: /mnt/uploads
+            - name: datasets
+              mountPath: /mnt/datasets
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: "16Gi"
+              cpu: "4"
+              nvidia.com/gpu: "1"
+          # Simple TCP probe for JupyterLab
+          livenessProbe:
+            tcpSocket:
+              port: 8888
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8888
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: blob-models-pvc
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: blob-uploads-pvc
+        - name: datasets
+          persistentVolumeClaim:
+            claimName: blob-datasets-pvc
+        - name: workspace
+          emptyDir: {}
+      # Uncomment when ACR secret is created
+      # imagePullSecrets:
+      #   - name: acr-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-jupyterlab
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: jupyterlab
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8888
+      targetPort: 8888
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-jupyterlab
+
+---
+# NodePort for external access (development)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-jupyterlab-external
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: jupyterlab
+spec:
+  type: NodePort
+  ports:
+    - port: 8888
+      targetPort: 8888
+      nodePort: 30888
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-jupyterlab

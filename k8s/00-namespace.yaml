@@ -1,0 +1,89 @@
+# =============================================================================
+# ML Platform - Namespace and RBAC Configuration
+# =============================================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: namespace
+
+---
+# Service Account for ML workloads
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ml-platform-sa
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: service-account
+
+---
+# Role for managing training jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ml-platform-role
+  namespace: ml-platform
+rules:
+  # Manage Jobs (for training)
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Read pods and logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Read/write ConfigMaps and Secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Read PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+
+---
+# Bind role to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ml-platform-rolebinding
+  namespace: ml-platform
+subjects:
+  - kind: ServiceAccount
+    name: ml-platform-sa
+    namespace: ml-platform
+roleRef:
+  kind: Role
+  name: ml-platform-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole for reading nodes (GPU detection)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ml-platform-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+# Bind ClusterRole to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ml-platform-node-reader-binding
+subjects:
+  - kind: ServiceAccount
+    name: ml-platform-sa
+    namespace: ml-platform
+roleRef:
+  kind: ClusterRole
+  name: ml-platform-node-reader
+  apiGroup: rbac.authorization.k8s.io

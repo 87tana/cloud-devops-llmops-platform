@@ -1,0 +1,166 @@
+# =============================================================================
+# ML Platform - Storage Configuration
+# =============================================================================
+# Creates PersistentVolumes and PersistentVolumeClaims for:
+# - models: Trained model storage
+# - uploads: User uploaded datasets
+# - datasets: Pre-configured datasets
+#
+# NOTE: For production, replace hostPath with Azure Blob CSI driver
+# =============================================================================
+
+---
+# Storage Class for local storage (development)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ml-platform-storage
+  labels:
+    app.kubernetes.io/name: ml-platform
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# ============================================================================
+# Models Storage (for trained models)
+# ============================================================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-models
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: models
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ml-platform-storage
+  # Using hostPath for development - replace with Azure Blob for production
+  hostPath:
+    path: /mnt/data/models
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blob-models-pvc
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: models
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ml-platform-storage
+  resources:
+    requests:
+      storage: 50Gi
+  selector:
+    matchLabels:
+      storage-type: models
+
+---
+# ============================================================================
+# Uploads Storage (for user uploaded files)
+# ============================================================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-uploads
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: uploads
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ml-platform-storage
+  hostPath:
+    path: /mnt/data/uploads
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blob-uploads-pvc
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: uploads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ml-platform-storage
+  resources:
+    requests:
+      storage: 20Gi
+  selector:
+    matchLabels:
+      storage-type: uploads
+
+---
+# ============================================================================
+# Datasets Storage (for pre-configured datasets)
+# ============================================================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-datasets
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: datasets
+spec:
+  capacity:
+    storage: 30Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ml-platform-storage
+  hostPath:
+    path: /mnt/data/datasets
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blob-datasets-pvc
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    storage-type: datasets
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ml-platform-storage
+  resources:
+    requests:
+      storage: 30Gi
+  selector:
+    matchLabels:
+      storage-type: datasets

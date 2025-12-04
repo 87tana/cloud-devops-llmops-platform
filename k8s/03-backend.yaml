@@ -1,0 +1,132 @@
+# =============================================================================
+# ML Platform - Backend Service (FastAPI)
+# =============================================================================
+# Runs on control plane node for API serving
+# Handles: Model inference, training job submission, file uploads
+# =============================================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-backend
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-backend
+  template:
+    metadata:
+      labels:
+        app: ml-backend
+        app.kubernetes.io/name: ml-platform
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: ml-platform-sa
+      # Schedule on control plane (has storage access)
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: backend
+          # UPDATE: Replace with your ACR after terraform apply
+          # image: <your-acr>.azurecr.io/ml-backend:v1
+          image: ml-backend:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: MODELS_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-platform-config
+                  key: MODELS_DIR
+            - name: UPLOAD_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-platform-config
+                  key: UPLOAD_DIR
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models
+            - name: uploads
+              mountPath: /mnt/uploads
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: blob-models-pvc
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: blob-uploads-pvc
+      # Uncomment when ACR secret is created
+      # imagePullSecrets:
+      #   - name: acr-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-backend
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-backend
+
+---
+# NodePort for external access (development)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-backend-external
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: backend
+spec:
+  type: NodePort
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30800
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-backend

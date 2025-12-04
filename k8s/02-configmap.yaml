@@ -1,0 +1,85 @@
+# =============================================================================
+# ML Platform - ConfigMaps
+# =============================================================================
+# Configuration for all ML Platform services
+# Update ACR_LOGIN_SERVER after Terraform apply
+# =============================================================================
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ml-platform-config
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+data:
+  # Storage paths
+  MODELS_DIR: "/mnt/models"
+  UPLOAD_DIR: "/mnt/uploads"
+  DATASETS_DIR: "/mnt/datasets"
+
+  # Service URLs (internal cluster DNS)
+  BACKEND_URL: "http://ml-backend:8000"
+  FRONTEND_URL: "http://ml-frontend:8501"
+
+  # Model defaults
+  DEFAULT_MODEL: "gpt2"
+  MAX_TOKENS: "100"
+
+  # Training defaults
+  DEFAULT_EPOCHS: "3"
+  DEFAULT_BATCH_SIZE: "4"
+  DEFAULT_LEARNING_RATE: "2e-4"
+
+---
+# ACR Secret Template - Update with actual values from terraform output
+# Run: kubectl create secret docker-registry acr-secret \
+#   --docker-server=<ACR_LOGIN_SERVER> \
+#   --docker-username=<ACR_USERNAME> \
+#   --docker-password=<ACR_PASSWORD> \
+#   -n ml-platform
+apiVersion: v1
+kind: Secret
+metadata:
+  name: acr-secret-placeholder
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+  annotations:
+    description: "Placeholder - create actual secret with ACR credentials"
+type: Opaque
+stringData:
+  .note: |
+    This is a placeholder. Create the actual secret with:
+
+    kubectl create secret docker-registry acr-secret \
+      --docker-server=<your-acr>.azurecr.io \
+      --docker-username=<acr-username> \
+      --docker-password=<acr-password> \
+      -n ml-platform
+
+    Get values from: terraform output -json
+
+---
+# Storage credentials template
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-credentials-placeholder
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+  annotations:
+    description: "Placeholder - create actual secret with storage credentials"
+type: Opaque
+stringData:
+  .note: |
+    This is a placeholder. Create the actual secret with:
+
+    kubectl create secret generic storage-credentials \
+      --from-literal=AZURE_STORAGE_ACCOUNT=<storage-account-name> \
+      --from-literal=AZURE_STORAGE_KEY=<storage-account-key> \
+      -n ml-platform
+
+    Get values from: terraform output -json

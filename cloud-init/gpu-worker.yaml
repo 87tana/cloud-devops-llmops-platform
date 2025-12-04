@@ -1,0 +1,201 @@
+#cloud-config
+# =============================================================================
+# ML Platform - GPU Worker Node Cloud-Init
+# =============================================================================
+# Installs: NVIDIA driver 535-server, CNI plugins, NVIDIA Container Toolkit,
+#           containerd, kubeadm, kubelet
+# Configures: NVIDIA runtime as default for containers, Kubernetes prerequisites
+# CRITICAL: NVIDIA driver, CNI plugins, and nvidia-ctk --set-as-default are REQUIRED!
+# =============================================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gpg
+  - jq
+  - conntrack
+  - socat
+  - nfs-common
+  - ubuntu-drivers-common
+
+write_files:
+  # Kernel modules for Kubernetes
+  - path: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+
+  # Sysctl settings for Kubernetes networking
+  - path: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+
+  # ACR credentials (if provided)
+  - path: /etc/acr-credentials
+    permissions: '0600'
+    content: |
+      ACR_NAME=${acr_name}
+      ACR_LOGIN_SERVER=${acr_login_server}
+
+  # Storage credentials (if provided)
+  - path: /etc/storage-credentials
+    permissions: '0600'
+    content: |
+      STORAGE_ACCOUNT_NAME=${storage_account_name}
+      STORAGE_ACCOUNT_KEY=${storage_account_key}
+
+  # Cluster configuration
+  - path: /etc/k8s-cluster-config
+    permissions: '0644'
+    content: |
+      KUBERNETES_VERSION=${kubernetes_version}
+      CONTROL_PLANE_IP=${control_plane_ip}
+      ADMIN_USERNAME=${admin_username}
+
+runcmd:
+  # Log start
+  - 'echo "$(date): Starting GPU worker cloud-init" >> /var/log/cloud-init-k8s.log'
+
+  # Load kernel modules
+  - modprobe overlay
+  - modprobe br_netfilter
+  - sysctl --system
+
+  # Disable swap (required for Kubernetes)
+  - swapoff -a
+  - "sed -i '/ swap / s/^/#/' /etc/fstab"
+
+  # Install CNI plugins (CRITICAL - without this pods fail with 'loopback not found'!)
+  - mkdir -p /opt/cni/bin
+  - 'curl -L "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-amd64-v1.3.0.tgz" | tar -C /opt/cni/bin -xz'
+  - 'echo "$(date): CNI plugins installed" >> /var/log/cloud-init-k8s.log'
+  - ls -la /opt/cni/bin/ >> /var/log/cloud-init-k8s.log
+
+  # Install NVIDIA driver (CRITICAL - must be done before container toolkit!)
+  - 'echo "$(date): Installing NVIDIA driver..." >> /var/log/cloud-init-k8s.log'
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-535-server
+  - 'echo "$(date): NVIDIA driver installed" >> /var/log/cloud-init-k8s.log'
+
+  # Install containerd
+  - apt-get install -y containerd
+  - mkdir -p /etc/containerd
+  - containerd config default > /etc/containerd/config.toml
+  - "sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml"
+  - systemctl restart containerd
+  - systemctl enable containerd
+  - 'echo "$(date): Containerd installed and configured" >> /var/log/cloud-init-k8s.log'
+
+  # Install NVIDIA Container Toolkit (CRITICAL for GPU workloads!)
+  - curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  - "curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list"
+  - apt-get update
+  - apt-get install -y nvidia-container-toolkit
+  - 'echo "$(date): NVIDIA Container Toolkit installed" >> /var/log/cloud-init-k8s.log'
+
+  # Configure containerd to use NVIDIA runtime as DEFAULT (CRITICAL!)
+  # Without --set-as-default, GPU pods will fail!
+  - nvidia-ctk runtime configure --runtime=containerd --set-as-default
+  - systemctl restart containerd
+  - 'echo "$(date): NVIDIA runtime set as default for containerd" >> /var/log/cloud-init-k8s.log'
+
+  # Verify NVIDIA setup
+  - 'nvidia-smi >> /var/log/cloud-init-k8s.log 2>&1 || echo "nvidia-smi not available yet" >> /var/log/cloud-init-k8s.log'
+  - nvidia-ctk --version >> /var/log/cloud-init-k8s.log 2>&1
+
+  # Install Kubernetes v${kubernetes_version} (MUST match control plane!)
+  - mkdir -p /etc/apt/keyrings
+  - 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+  - "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list"
+  - apt-get update
+  - apt-get install -y kubelet kubeadm kubectl
+  - apt-mark hold kubelet kubeadm kubectl
+  - 'echo "$(date): Kubernetes ${kubernetes_version} installed" >> /var/log/cloud-init-k8s.log'
+
+  # Verify versions match
+  - kubeadm version >> /var/log/cloud-init-k8s.log
+
+  # Create helper script for joining cluster
+  - |
+    cat > /usr/local/bin/k8s-join-cluster.sh << 'JOINSCRIPT'
+    #!/bin/bash
+    set -e
+
+    if [ -z "$1" ]; then
+      echo "Usage: $0 'kubeadm join <control-plane-ip>:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash>'"
+      echo ""
+      echo "Get the join command from control plane by running:"
+      echo "  sudo kubeadm token create --print-join-command"
+      exit 1
+    fi
+
+    echo "Joining Kubernetes cluster..."
+    eval "$1"
+
+    echo "Node joined successfully!"
+    echo "Verify on control plane with: kubectl get nodes"
+    JOINSCRIPT
+  - chmod +x /usr/local/bin/k8s-join-cluster.sh
+
+  # Create GPU verification script
+  - |
+    cat > /usr/local/bin/verify-gpu.sh << 'GPUSCRIPT'
+    #!/bin/bash
+    echo "=== GPU Verification ==="
+    echo ""
+    echo "1. NVIDIA Driver:"
+    nvidia-smi || echo "NVIDIA driver not loaded"
+    echo ""
+    echo "2. NVIDIA Container Toolkit:"
+    nvidia-ctk --version
+    echo ""
+    echo "3. CNI Plugins:"
+    ls /opt/cni/bin/
+    echo ""
+    echo "4. Containerd Runtime Config:"
+    grep -A5 "nvidia" /etc/containerd/config.toml | head -20
+    echo ""
+    echo "5. Kubernetes Version:"
+    kubeadm version
+    echo ""
+    echo "=== Verification Complete ==="
+    GPUSCRIPT
+  - chmod +x /usr/local/bin/verify-gpu.sh
+
+  # Signal completion
+  - touch /var/run/k8s-prerequisites-ready
+  - 'echo "$(date): GPU worker cloud-init complete" >> /var/log/cloud-init-k8s.log'
+
+final_message: |
+  ==========================================================================
+  ML Platform GPU Worker - Cloud-Init Complete
+  ==========================================================================
+
+  Kubernetes ${kubernetes_version} prerequisites installed with GPU support.
+
+  Installed components:
+  - NVIDIA driver 535-server
+  - CNI plugins: /opt/cni/bin/
+  - NVIDIA Container Toolkit (set as default runtime)
+  - containerd with SystemdCgroup
+  - kubeadm, kubelet, kubectl
+
+  Verification:
+  - Run: sudo /usr/local/bin/verify-gpu.sh
+  - Check: nvidia-smi
+  - Check: ls /opt/cni/bin/
+
+  To join cluster:
+  1. Get join command from control plane:
+     sudo kubeadm token create --print-join-command
+
+  2. Run on this GPU worker:
+     sudo /usr/local/bin/k8s-join-cluster.sh '<join-command>'
+
+  Check logs: /var/log/cloud-init-k8s.log
+  ==========================================================================

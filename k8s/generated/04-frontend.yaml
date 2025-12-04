@@ -1,0 +1,114 @@
+# =============================================================================
+# ML Platform - Frontend Service (Streamlit)
+# =============================================================================
+# Web UI for interacting with ML models
+# Runs on control plane node
+# =============================================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-frontend
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-frontend
+  template:
+    metadata:
+      labels:
+        app: ml-frontend
+        app.kubernetes.io/name: ml-platform
+        app.kubernetes.io/component: frontend
+    spec:
+      # Schedule on control plane
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: frontend
+          # UPDATE: Replace with your ACR after terraform apply
+          # image: <your-acr>.azurecr.io/ml-frontend:v1
+          image: mlplatformacrwqckxk.azurecr.io/ml-frontend:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+              name: http
+          env:
+            - name: BACKEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-platform-config
+                  key: BACKEND_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+      # Uncomment when ACR secret is created
+      # imagePullSecrets:
+      #   - name: acr-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-frontend
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8501
+      targetPort: 8501
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-frontend
+
+---
+# NodePort for external access (development)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-frontend-external
+  namespace: ml-platform
+  labels:
+    app.kubernetes.io/name: ml-platform
+    app.kubernetes.io/component: frontend
+spec:
+  type: NodePort
+  ports:
+    - port: 8501
+      targetPort: 8501
+      nodePort: 30501
+      protocol: TCP
+      name: http
+  selector:
+    app: ml-frontend

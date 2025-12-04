@@ -1,0 +1,176 @@
+#cloud-config
+# =============================================================================
+# ML Platform - Control Plane Node Cloud-Init
+# =============================================================================
+# Installs: CNI plugins, containerd, kubeadm, kubectl, kubelet, Azure CLI
+# Configures: Kubernetes prerequisites, kernel modules, sysctl settings
+# =============================================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gpg
+  - jq
+  - git
+  - conntrack
+  - socat
+  - nfs-common
+
+write_files:
+  # Kernel modules for Kubernetes
+  - path: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+
+  # Sysctl settings for Kubernetes networking
+  - path: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+
+  # Kubernetes init completion marker script
+  - path: /usr/local/bin/k8s-init-complete.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Signal that Kubernetes prerequisites are installed
+      touch /var/run/k8s-prerequisites-ready
+      echo "$(date): Kubernetes prerequisites installation complete" >> /var/log/cloud-init-k8s.log
+
+  # ACR credentials (if provided)
+  - path: /etc/acr-credentials
+    permissions: '0600'
+    content: |
+      ACR_NAME=${acr_name}
+      ACR_LOGIN_SERVER=${acr_login_server}
+
+  # Storage credentials (if provided)
+  - path: /etc/storage-credentials
+    permissions: '0600'
+    content: |
+      STORAGE_ACCOUNT_NAME=${storage_account_name}
+      STORAGE_ACCOUNT_KEY=${storage_account_key}
+
+  # Cluster configuration
+  - path: /etc/k8s-cluster-config
+    permissions: '0644'
+    content: |
+      KUBERNETES_VERSION=${kubernetes_version}
+      POD_NETWORK_CIDR=${pod_network_cidr}
+      CONTROL_PLANE_IP=${control_plane_ip}
+      ADMIN_USERNAME=${admin_username}
+
+runcmd:
+  # Log start
+  - 'echo "$(date): Starting control plane cloud-init" >> /var/log/cloud-init-k8s.log'
+
+  # Load kernel modules
+  - modprobe overlay
+  - modprobe br_netfilter
+  - sysctl --system
+
+  # Disable swap (required for Kubernetes)
+  - swapoff -a
+  - "sed -i '/ swap / s/^/#/' /etc/fstab"
+
+  # Install CNI plugins (CRITICAL for pod networking!)
+  - mkdir -p /opt/cni/bin
+  - 'curl -L "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-amd64-v1.3.0.tgz" | tar -C /opt/cni/bin -xz'
+  - 'echo "$(date): CNI plugins installed" >> /var/log/cloud-init-k8s.log'
+
+  # Install and configure containerd
+  - apt-get install -y containerd
+  - mkdir -p /etc/containerd
+  - containerd config default > /etc/containerd/config.toml
+  - "sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml"
+  - systemctl restart containerd
+  - systemctl enable containerd
+  - 'echo "$(date): Containerd installed and configured" >> /var/log/cloud-init-k8s.log'
+
+  # Install Kubernetes v${kubernetes_version}
+  - mkdir -p /etc/apt/keyrings
+  - 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+  - "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list"
+  - apt-get update
+  - apt-get install -y kubelet kubeadm kubectl
+  - apt-mark hold kubelet kubeadm kubectl
+  - 'echo "$(date): Kubernetes ${kubernetes_version} installed" >> /var/log/cloud-init-k8s.log'
+
+  # Install Azure CLI
+  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+  - 'echo "$(date): Azure CLI installed" >> /var/log/cloud-init-k8s.log'
+
+  # Install Helm
+  - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  - 'echo "$(date): Helm installed" >> /var/log/cloud-init-k8s.log'
+
+  # Setup kubectl for admin user
+  - mkdir -p /home/${admin_username}/.kube
+  - 'chown -R ${admin_username}:${admin_username} /home/${admin_username}/.kube'
+
+  # Create helper scripts
+  - |
+    cat > /usr/local/bin/k8s-init-cluster.sh << 'INITSCRIPT'
+    #!/bin/bash
+    set -e
+    source /etc/k8s-cluster-config
+
+    echo "Initializing Kubernetes cluster..."
+    kubeadm init --pod-network-cidr=$POD_NETWORK_CIDR --apiserver-advertise-address=$CONTROL_PLANE_IP
+
+    echo "Setting up kubectl for $ADMIN_USERNAME..."
+    mkdir -p /home/$ADMIN_USERNAME/.kube
+    cp /etc/kubernetes/admin.conf /home/$ADMIN_USERNAME/.kube/config
+    chown -R $ADMIN_USERNAME:$ADMIN_USERNAME /home/$ADMIN_USERNAME/.kube
+
+    echo "Installing Flannel CNI..."
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+    echo "Removing control plane taint for single-node testing..."
+    kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+    echo "Cluster initialization complete!"
+    echo "Run 'kubeadm token create --print-join-command' to get the join command for workers."
+    INITSCRIPT
+  - chmod +x /usr/local/bin/k8s-init-cluster.sh
+
+  # Create ACR login helper
+  - |
+    cat > /usr/local/bin/acr-login.sh << 'ACRSCRIPT'
+    #!/bin/bash
+    source /etc/acr-credentials
+    if [ -n "$ACR_LOGIN_SERVER" ]; then
+      az acr login --name $ACR_NAME
+    else
+      echo "No ACR configured"
+    fi
+    ACRSCRIPT
+  - chmod +x /usr/local/bin/acr-login.sh
+
+  # Signal completion
+  - /usr/local/bin/k8s-init-complete.sh
+  - 'echo "$(date): Control plane cloud-init complete" >> /var/log/cloud-init-k8s.log'
+
+final_message: |
+  ==========================================================================
+  ML Platform Control Plane - Cloud-Init Complete
+  ==========================================================================
+
+  Kubernetes ${kubernetes_version} prerequisites installed.
+
+  Next steps:
+  1. Run: sudo /usr/local/bin/k8s-init-cluster.sh
+  2. Or manually:
+     sudo kubeadm init --pod-network-cidr=${pod_network_cidr}
+     mkdir -p ~/.kube && sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+     kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+  Check logs: /var/log/cloud-init-k8s.log
+  ==========================================================================
