@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
-# Cache buster: v5 with GPU auto-start
+# Cache buster: v6 with Swagger root_path fix
 COPY app.py .
 
 EXPOSE 8000
