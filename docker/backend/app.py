@@ -15,7 +15,10 @@ from pydantic import BaseModel
 from transformers import pipeline
 import torch
 
-app = FastAPI(title="ML Platform API")
+app = FastAPI(
+    title="ML Platform API",
+    root_path=os.getenv("ROOT_PATH", "/api")  # For ingress path-based routing
+)
 
 app.add_middleware(
     CORSMiddleware,
