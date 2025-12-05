@@ -197,7 +197,7 @@ def create_training_job(job_id: str, config: dict) -> dict:
         "kind": "Job",
         "metadata": {
             "name": job_id,
-            "namespace": "default"
+            "namespace": "ml-platform"
         },
         "spec": {
             "ttlSecondsAfterFinished": 3600,
@@ -206,7 +206,7 @@ def create_training_job(job_id: str, config: dict) -> dict:
                     "restartPolicy": "Never",
                     "containers": [{
                         "name": "trainer",
-                        "image": "mlplatformacr2024.azurecr.io/ml-jupyterlab:v1",
+                        "image": "mlplatformacrwqckxk.azurecr.io/ml-jupyter:latest",
                         "command": ["python3", "-c", f"""
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, TextDataset, DataCollatorForLanguageModeling
