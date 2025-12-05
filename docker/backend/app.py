@@ -271,7 +271,10 @@ print("Training complete!")
                     ],
                     "nodeSelector": {
                         "nvidia.com/gpu.present": "true"
-                    }
+                    },
+                    "imagePullSecrets": [
+                        {"name": "acr-secret"}
+                    ]
                 }
             }
         }
