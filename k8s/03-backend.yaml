@@ -36,10 +36,8 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: backend
-          # UPDATE: Replace with your ACR after terraform apply
-          # image: <your-acr>.azurecr.io/ml-backend:v1
-          image: ml-backend:v1
-          imagePullPolicy: IfNotPresent
+          image: mlplatformacrwqckxk.azurecr.io/ml-backend:v11-azure-auth
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
@@ -54,6 +52,25 @@ spec:
                 configMapKeyRef:
                   name: ml-platform-config
                   key: UPLOAD_DIR
+            - name: AZURE_RESOURCE_GROUP
+              value: "rg-mlplatform-auto"
+            - name: AZURE_GPU_VM_NAME
+              value: "vm-mlplatform-gpu"
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: azure-sp-credentials
+                  key: AZURE_CLIENT_ID
+            - name: AZURE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: azure-sp-credentials
+                  key: AZURE_CLIENT_SECRET
+            - name: AZURE_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: azure-sp-credentials
+                  key: AZURE_TENANT_ID
           volumeMounts:
             - name: models
               mountPath: /mnt/models
@@ -83,13 +100,12 @@ spec:
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: blob-models-pvc
+            claimName: models-pvc-cp
         - name: uploads
           persistentVolumeClaim:
-            claimName: blob-uploads-pvc
-      # Uncomment when ACR secret is created
-      # imagePullSecrets:
-      #   - name: acr-secret
+            claimName: uploads-pvc-cp
+      imagePullSecrets:
+        - name: acr-secret
 
 ---
 apiVersion: v1

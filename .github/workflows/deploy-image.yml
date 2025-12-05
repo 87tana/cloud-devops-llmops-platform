@@ -1,0 +1,75 @@
+name: Build and Deploy Image
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        required: true
+        type: string
+      docker_context:
+        required: true
+        type: string
+      deployment_name:
+        required: true
+        type: string
+      container_name:
+        required: true
+        type: string
+
+env:
+  ACR_NAME: mlplatformacrwqckxk
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate version tag
+        id: version
+        run: echo "tag=v$(date +%Y%m%d)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Login to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.AZURE_ACR_USERNAME }}
+          password: ${{ secrets.AZURE_ACR_PASSWORD }}
+
+      - name: Build and push
+        run: |
+          docker build \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:latest \
+            ${{ inputs.docker_context }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:latest
+
+      - name: Deploy to K8s
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.K8S_CONTROL_PLANE_IP }}
+          username: azureuser
+          key: ${{ secrets.K8S_SSH_KEY }}
+          script: |
+            kubectl set image deployment/${{ inputs.deployment_name }} \
+              -n ml-platform \
+              ${{ inputs.container_name }}=${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }}
+
+            # Check if target node is available (GPU deployments may fail if VM is off)
+            if kubectl rollout status deployment/${{ inputs.deployment_name }} -n ml-platform --timeout=120s 2>/dev/null; then
+              echo "✅ Deployment rolled out successfully"
+            else
+              echo "⚠️ Rollout pending - target node may be offline. Image updated, will deploy when node is ready."
+              kubectl get deployment/${{ inputs.deployment_name }} -n ml-platform -o wide
+            fi
+
+      - name: Deployment summary
+        run: |
+          echo "### Deployment Complete! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment | \`${{ inputs.deployment_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${GITHUB_SHA::7}\` |" >> $GITHUB_STEP_SUMMARY

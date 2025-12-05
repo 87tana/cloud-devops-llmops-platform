@@ -71,11 +71,11 @@ spec:
             requests:
               memory: "4Gi"
               cpu: "1"
-              nvidia.com/gpu: "1"
+              # GPU not reserved - allows training jobs to use it
+              # JupyterLab can still access GPU via CUDA when available
             limits:
               memory: "16Gi"
               cpu: "4"
-              nvidia.com/gpu: "1"
           # Simple TCP probe for JupyterLab
           livenessProbe:
             tcpSocket:

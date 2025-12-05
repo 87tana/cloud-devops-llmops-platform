@@ -15,7 +15,10 @@ from pydantic import BaseModel
 from transformers import pipeline
 import torch
 
-app = FastAPI(title="ML Platform API")
+app = FastAPI(
+    title="ML Platform API",
+    root_path=os.getenv("ROOT_PATH", "/api")  # For ingress path-based routing
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +30,46 @@ app.add_middleware(
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/mnt/models"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/mnt/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Azure VM auto-start config
+AZURE_RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "rg-mlplatform")
+AZURE_GPU_VM_NAME = os.getenv("AZURE_GPU_VM_NAME", "vm-mlplatform-gpu")
+
+# Azure Service Principal credentials
+AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
+AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
+
+_azure_logged_in = False
+
+def ensure_azure_login():
+    """Ensure Azure CLI is logged in using Service Principal."""
+    global _azure_logged_in
+    if _azure_logged_in:
+        return True
+
+    if not all([AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID]):
+        print("Azure credentials not configured")
+        return False
+
+    try:
+        result = subprocess.run(
+            ["az", "login", "--service-principal",
+             "-u", AZURE_CLIENT_ID,
+             "-p", AZURE_CLIENT_SECRET,
+             "--tenant", AZURE_TENANT_ID],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            _azure_logged_in = True
+            print("Azure CLI login successful")
+            return True
+        else:
+            print(f"Azure login failed: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"Azure login error: {e}")
+        return False
 
 _model_cache = {}
 
@@ -72,15 +115,53 @@ def load_model(model_id: str):
         return None
 
 def check_gpu_worker() -> dict:
+    """Check if GPU worker node is ready in K8s."""
     try:
         result = subprocess.run(
-            ["kubectl", "get", "nodes", "-l", "nvidia.com/gpu.present=true", "-o", "name"],
+            ["kubectl", "get", "nodes", "-l", "nvidia.com/gpu.present=true",
+             "-o", "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}"],
             capture_output=True, text=True, timeout=5
         )
-        has_gpu = bool(result.stdout.strip())
-        return {"available": has_gpu, "method": "k8s"}
+        is_ready = result.stdout.strip() == "True"
+        return {"available": is_ready, "method": "k8s"}
     except:
         return {"available": False, "method": "none"}
+
+def start_gpu_vm() -> dict:
+    """Start GPU VM using Azure CLI with Service Principal auth."""
+    # Ensure we're logged in to Azure
+    if not ensure_azure_login():
+        return {"status": "error", "message": "Azure authentication failed - credentials not configured"}
+
+    try:
+        # Check if VM is already running
+        status_result = subprocess.run(
+            ["az", "vm", "get-instance-view",
+             "--resource-group", AZURE_RESOURCE_GROUP,
+             "--name", AZURE_GPU_VM_NAME,
+             "--query", "instanceView.statuses[1].displayStatus", "-o", "tsv"],
+            capture_output=True, text=True, timeout=30
+        )
+        current_status = status_result.stdout.strip()
+
+        if current_status == "VM running":
+            return {"status": "already_running", "message": "GPU VM is already running"}
+
+        # Start the VM
+        start_result = subprocess.run(
+            ["az", "vm", "start",
+             "--resource-group", AZURE_RESOURCE_GROUP,
+             "--name", AZURE_GPU_VM_NAME,
+             "--no-wait"],
+            capture_output=True, text=True, timeout=60
+        )
+
+        if start_result.returncode == 0:
+            return {"status": "starting", "message": "GPU VM start initiated"}
+        else:
+            return {"status": "error", "message": start_result.stderr}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 def scan_models_dir() -> dict:
     finetuned = {}
@@ -116,7 +197,7 @@ def create_training_job(job_id: str, config: dict) -> dict:
         "kind": "Job",
         "metadata": {
             "name": job_id,
-            "namespace": "default"
+            "namespace": "ml-platform"
         },
         "spec": {
             "ttlSecondsAfterFinished": 3600,
@@ -125,7 +206,7 @@ def create_training_job(job_id: str, config: dict) -> dict:
                     "restartPolicy": "Never",
                     "containers": [{
                         "name": "trainer",
-                        "image": "mlplatformacr2024.azurecr.io/ml-jupyterlab:v1",
+                        "image": "mlplatformacrwqckxk.azurecr.io/ml-jupyter:latest",
                         "command": ["python3", "-c", f"""
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, TextDataset, DataCollatorForLanguageModeling
@@ -190,7 +271,10 @@ print("Training complete!")
                     ],
                     "nodeSelector": {
                         "nvidia.com/gpu.present": "true"
-                    }
+                    },
+                    "imagePullSecrets": [
+                        {"name": "acr-secret"}
+                    ]
                 }
             }
         }
@@ -228,6 +312,32 @@ def health():
 @app.get("/gpu/status")
 def gpu_status():
     return check_gpu_worker()
+
+@app.post("/gpu/start")
+def gpu_start():
+    """Manually start the GPU VM."""
+    return start_gpu_vm()
+
+@app.post("/gpu/stop")
+def gpu_stop():
+    """Stop the GPU VM to save costs."""
+    if not ensure_azure_login():
+        return {"status": "error", "message": "Azure authentication failed"}
+
+    try:
+        result = subprocess.run(
+            ["az", "vm", "deallocate",
+             "--resource-group", AZURE_RESOURCE_GROUP,
+             "--name", AZURE_GPU_VM_NAME,
+             "--no-wait"],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            return {"status": "stopping", "message": "GPU VM stop initiated"}
+        else:
+            return {"status": "error", "message": result.stderr}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/models")
 def list_models():
@@ -395,22 +505,21 @@ async def submit_training_job(
         "learning_rate": learning_rate
     }
     
-    if gpu["available"]:
-        k8s_result = create_training_job(job_id, config)
-        return {
-            "job_id": job_id,
-            "status": "submitted" if k8s_result["success"] else "failed",
-            "gpu_available": True,
-            "config": config,
-            "output_path": f"/mnt/models/{model_name.lower()}",
-            "k8s_result": k8s_result
-        }
-    else:
-        return {
-            "job_id": job_id,
-            "status": "pending",
-            "gpu_available": False,
-            "config": config,
-            "output_path": f"/mnt/models/{model_name.lower()}",
-            "message": "GPU not available - job queued"
-        }
+    # Auto-start GPU VM if not available
+    vm_start_result = None
+    if not gpu["available"]:
+        vm_start_result = start_gpu_vm()
+
+    # Create job - K8s will schedule it when GPU node is ready
+    k8s_result = create_training_job(job_id, config)
+
+    return {
+        "job_id": job_id,
+        "status": "submitted" if k8s_result["success"] else "failed",
+        "gpu_available": gpu["available"],
+        "gpu_vm_start": vm_start_result,
+        "config": config,
+        "output_path": f"/mnt/models/{model_name.lower()}",
+        "k8s_result": k8s_result,
+        "message": "Job submitted. GPU VM starting..." if vm_start_result else None
+    }
