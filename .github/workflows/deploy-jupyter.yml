@@ -15,4 +15,5 @@ jobs:
       image_name: ml-jupyter
       docker_context: docker/jupyterlab
       deployment_name: ml-jupyterlab
+      container_name: jupyterlab
     secrets: inherit

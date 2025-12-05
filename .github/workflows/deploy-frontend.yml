@@ -15,4 +15,5 @@ jobs:
       image_name: ml-frontend
       docker_context: docker/frontend
       deployment_name: ml-frontend
+      container_name: frontend
     secrets: inherit

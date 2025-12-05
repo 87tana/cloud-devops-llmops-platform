@@ -12,6 +12,9 @@ on:
       deployment_name:
         required: true
         type: string
+      container_name:
+        required: true
+        type: string
 
 env:
   ACR_NAME: mlplatformacrwqckxk
@@ -51,7 +54,7 @@ jobs:
           script: |
             kubectl set image deployment/${{ inputs.deployment_name }} \
               -n ml-platform \
-              ${{ inputs.deployment_name }}=${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }}
+              ${{ inputs.container_name }}=${{ env.ACR_NAME }}.azurecr.io/${{ inputs.image_name }}:${{ steps.version.outputs.tag }}
 
             # Check if target node is available (GPU deployments may fail if VM is off)
             if kubectl rollout status deployment/${{ inputs.deployment_name }} -n ml-platform --timeout=120s 2>/dev/null; then

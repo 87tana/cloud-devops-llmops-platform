@@ -15,4 +15,5 @@ jobs:
       image_name: ml-backend
       docker_context: docker/backend
       deployment_name: ml-backend
+      container_name: backend
     secrets: inherit
